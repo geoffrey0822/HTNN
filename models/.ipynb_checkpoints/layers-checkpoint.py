@@ -4,24 +4,31 @@ import os
 
 class Projection(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, weight):
+    def forward(ctx, input, weight, shadow):
         ctx.save_for_backward(input, weight)
         tmp = (weight == weight.max(dim=0, keepdim=True)[0])
         sigma = tmp.view_as(weight).int().float()
         sigma_w = sigma.mul(weight)
+        #print(sigma_w)
+        #print(input)
         #output = input.mm(sigma.mul(weight).t())
         output = input.mm(sigma_w)
         return output
     
     @staticmethod
     def backward(ctx, grad_output):
-        input, weight = ctx.saved_tensors
+        input, weight= ctx.saved_tensors
+        #print('backward')
         grad_input = grad_weight = None
-        sigma = (weight == weight.max(dim=0, keepdim=True)[0]).view_as(input).int().float()
+        tmp = (weight == weight.max(dim=0, keepdim=True)[0])
+        sigma = tmp.view_as(weight).int().float()
+        sigma_w = sigma.mul(weight)
+        #sigma = (weight == weight.max(dim=0, keepdim=True)[0]).view_as(input).int().float()
         if ctx.needs_input_grad[0]:
-            grad_input = grad_output.mm(sigma.mul(weight))
+            grad_input = grad_output.mm(sigma_w.t())
         if ctx.needs_input_grad[1]:
             grad_weight = grad_output.mm(input.mm(sigma))
+        
         return grad_input, grad_weight, None
 
 class ClassProjection(nn.Module):
@@ -33,6 +40,7 @@ class ClassProjection(nn.Module):
         i_child_list = []
         self.input_dim = 0 
         self.output_dim = 0
+        self.shadow_tensor = None
         
         if mapfile_path is not None:
             with (mapfile_path, 'r') as f:
@@ -72,7 +80,7 @@ class ClassProjection(nn.Module):
                         self.weight.data[tmp_pair[subcls], basecls] = 1.0
     
     def forward(self, input):
-        return Projection.apply(input, self.weight)
+        return Projection.apply(input, self.weight, self.shadow_tensor)
     
     #def extra_repr(self):
         #return None
