@@ -27,7 +27,7 @@ class Projection(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             grad_input = grad_output.mm(sigma_w.t())
         if ctx.needs_input_grad[1]:
-            grad_weight = grad_output.mm(input.mm(sigma))
+            grad_weight = grad_output.t().mm(input)
         
         return grad_input, grad_weight, None
 
