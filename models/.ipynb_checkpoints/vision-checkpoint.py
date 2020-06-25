@@ -94,7 +94,7 @@ class AlexNet(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         #x = self.classifier(x)
-        return self.fc(x), F.softmax(self.classifier(x), dim=1)
+        return self.fc(x), self.classifier(x)
 
 
 class HTCNN(nn.Module):
@@ -181,7 +181,7 @@ class HTCNN(nn.Module):
                 y = []
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -199,7 +199,7 @@ class HTCNN(nn.Module):
             else:
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
@@ -218,7 +218,7 @@ class HTCNN(nn.Module):
                 y = []
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -236,7 +236,7 @@ class HTCNN(nn.Module):
             else:
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
@@ -342,7 +342,7 @@ class HTCNN_M(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -361,7 +361,7 @@ class HTCNN_M(nn.Module):
             else:
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
@@ -381,7 +381,7 @@ class HTCNN_M(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -401,7 +401,7 @@ class HTCNN_M(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
@@ -510,7 +510,7 @@ class HTCNN_M_IN(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -529,7 +529,7 @@ class HTCNN_M_IN(nn.Module):
             else:
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = F.log_softmax(self.fc_s[i](feat_y), dim=1)
+                    _y = self.fc_s[i](feat_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
@@ -549,7 +549,7 @@ class HTCNN_M_IN(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     y.append(_y)
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
@@ -569,7 +569,7 @@ class HTCNN_M_IN(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
-                    _y = F.log_softmax(b_y, dim=1)
+                    _y = b_y
                     if y_ is None:
                         y_ = self.proj_layers[i](_y)
                     else:
