@@ -22,19 +22,11 @@ class LeNet5(nn.Module):
             nn.Conv2d(in_channels=32, out_channels=256, kernel_size=5, stride=1),
             nn.Tanh()
         )
-
-        self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(in_features=256, out_features=128),
-            nn.Tanh(),
-            nn.Linear(in_features=128, out_features=n_classes),
-        )
+        self.drop = nn.Dropout(p=0.7)
+        self.fc_1 = nn.Linear(in_features=256, out_features=128)
+        self.fc_2 = nn.Linear(in_features=128, out_features=n_classes)
+        self.activate_1 = nn.Tanh()
         
-        self.fc = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(in_features=256, out_features=128),
-            nn.Tanh()
-        )
         
         self.input_dim = [3, 32, 32]
         self.feat_dim = 128
@@ -43,9 +35,9 @@ class LeNet5(nn.Module):
     def forward(self, x):
         x = self.feature_extractor(x)
         x = torch.flatten(x, 1)
-        #logits = self.classifier(x)
-        #probs = F.softmax(logits, dim=1)
-        return self.fc(x), self.classifier(x)
+        #x_1 = self.activate_1(self.fc_1(self.dropout(x)))
+        x_1 = self.activate_1(self.fc_1(x))
+        return x_1, self.fc_2(x_1)
 
 
 class AlexNet(nn.Module):
@@ -68,23 +60,12 @@ class AlexNet(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2),
         )
         self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
-        self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, n_classes),
-        )
-        self.fc = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True)
-        )
+        
+        self.drop_1 = nn.Dropout(p=0.7)
+        self.drop_2 = nn.Dropout(p=0.7)
+        self.fc_1 = nn.Linear(256 * 6 * 6, 4096)
+        self.fc_2 = nn.Linear(4096, 4096)
+        self.fc_3 = nn.Linear(4096, n_classes)
         
         self.input_dim = [3, 224, 224]
         self.feat_dim = 4096
@@ -93,8 +74,9 @@ class AlexNet(nn.Module):
         x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        #x = self.classifier(x)
-        return self.fc(x), self.classifier(x)
+        #x_1 = F.relu(self.fc_2(self.drop_2(F.relu(self.fc_1(self.drop_1(x))))))
+        x_1 = F.relu(self.fc_2(F.relu(self.fc_1(x))))
+        return x_1, self.fc_3(x_1)
 
 
 class HTCNN(nn.Module):
@@ -184,34 +166,34 @@ class HTCNN(nn.Module):
                     _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
 
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
         else:
             if self.with_aux:
@@ -221,33 +203,33 @@ class HTCNN(nn.Module):
                     _y = b_y
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
 
 
@@ -345,35 +327,35 @@ class HTCNN_M(nn.Module):
                     _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
         else:
             if self.with_aux:
@@ -384,18 +366,18 @@ class HTCNN_M(nn.Module):
                     _y = b_y
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
@@ -403,17 +385,17 @@ class HTCNN_M(nn.Module):
                     feat_y, b_y = back_results[i]
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
 
 
@@ -513,35 +495,35 @@ class HTCNN_M_IN(nn.Module):
                     _y = self.fc_s[i](feat_y)
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
         else:
             if self.with_aux:
@@ -552,18 +534,18 @@ class HTCNN_M_IN(nn.Module):
                     _y = b_y
                     y.append(_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 y.append(b_y)
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, y
             else:
                 y_ = None
@@ -571,15 +553,15 @@ class HTCNN_M_IN(nn.Module):
                     feat_y, b_y = back_results[i]
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](_y)
+                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](_y)) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](_y)) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, b_y)
+                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
                 else:
-                    y_ = torch.add(y_, b_y)
+                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
                 return y_, None
