@@ -81,11 +81,12 @@ class AlexNet(nn.Module):
 
 class HTCNN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbone = None, 
-                 feat_dim = 0, isCuda = False, isConditionProb = True):
+                 feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True):
         super(HTCNN, self).__init__()
         
         
         self.n_bin = 0
+        self.coastBack = coastBack
         bins = []
         bin_uniques = []
         i_bins = []
@@ -130,12 +131,13 @@ class HTCNN(nn.Module):
         i = 0
         for ibin in bins:
             output_dim = len(bin_uniques[i])
+            forceDisable = not coastBack
             if isCuda:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]).cuda())
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable = forceDisable).cuda())
                 if with_fc:
                     self.fc_s.append(nn.Linear(input_dim, output_dim).cuda())
             else:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]))
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable = forceDisable))
                 if with_fc:
                     self.fc_s.append(nn.Linear(input_dim, output_dim))
             
@@ -235,11 +237,12 @@ class HTCNN(nn.Module):
 
 class HTCNN_M(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbones = None, 
-                 feat_dim = [], isCuda = False, isConditionProb = True):
+                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True):
         super(HTCNN_M, self).__init__()
         
         
         self.n_bin = 0
+        self.coastBack = coastBack
         bins = []
         bin_uniques = []
         i_bins = []
@@ -283,13 +286,14 @@ class HTCNN_M(nn.Module):
         self.fc_s = nn.ModuleList()
         i = 0
         for ibin in bins:
+            forceDisable = not coastBack
             output_dim = len(bin_uniques[i])
             if isCuda:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]).cuda())
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable=forceDisable).cuda())
                 if with_fc:
                     self.fc_s.append(nn.Linear(self.input_dims[i], output_dim).cuda())
             else:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]))
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable=forceDisable))
                 if with_fc:
                     self.fc_s.append(nn.Linear(self.input_dims[i], output_dim))
             
@@ -401,11 +405,12 @@ class HTCNN_M(nn.Module):
 
 class HTCNN_M_IN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbones = None, 
-                 feat_dim = [], isCuda = False, isConditionProb = True):
+                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True):
         super(HTCNN_M_IN, self).__init__()
         
         
         self.n_bin = 0
+        self.coastBack = coastBack
         bins = []
         bin_uniques = []
         i_bins = []
@@ -449,13 +454,14 @@ class HTCNN_M_IN(nn.Module):
         self.fc_s = nn.ModuleList()
         i = 0
         for ibin in bins:
+            forceDisable = not coastBack
             output_dim = len(bin_uniques[i])
             if isCuda:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]).cuda())
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable=forceDisable).cuda())
                 if with_fc:
                     self.fc_s.append(nn.Linear(self.input_dims[i], output_dim).cuda())
             else:
-                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i]))
+                self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable=forceDisable))
                 if with_fc:
                     self.fc_s.append(nn.Linear(self.input_dims[i], output_dim))
             

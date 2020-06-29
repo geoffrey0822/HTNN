@@ -352,12 +352,12 @@ def computeAccuracy_m_in(dataset, model, batchsize = 1, withAux = False, preproc
 def train(trainset, valset, label_file, output_path, output_fname, 
           start_lr=0.1, lr_discount=0.1, lr_steps=[], epoch=30,
           train_batch = 16, val_batch = 16, val_at = 10,
-          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0,
-          preprocessor = None, isConditionProb=True):
+          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0, fine_scaler = 1.0,
+          preprocessor = None, isConditionProb=True, coastBack=True):
     global backbone
     best_v_result = 0.0
     model = HTCNN(label_file, with_aux = True, with_fc = True, backbone=backbone,
-              isCuda=True, isConditionProb=isConditionProb).cuda()
+              isCuda=True, isConditionProb=isConditionProb, coastBack=coastBack).cuda()
     
     #for name, param in model.named_parameters():
     #    if param.requires_grad:
@@ -387,7 +387,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
         best_v_result = v_result
     
     lr = start_lr
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=0.0001)
+    optimizer = optim.SGD(model.parameters(), lr=lr)
     #optimizer = optim.Adagrad(model.parameters(), lr=lr)
     
     
@@ -441,7 +441,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
                 else:
                     epoch_aux_losses_v[iloss] += aux_loss_v
                 iloss += 1
-            fine_loss = losses[-1](pred_aux[-1], gt_final)
+            fine_loss = losses[-1](pred_aux[-1], gt_final)*fine_scaler
             total_loss += fine_loss
             fine_loss_v = fine_loss.item()
             if len(epoch_aux_losses_v) <= iloss:
@@ -525,14 +525,14 @@ def train(trainset, valset, label_file, output_path, output_fname,
 def train_mb(trainset, valset, label_file, output_path, output_fname, 
           start_lr=0.1, lr_discount=0.1, lr_steps=[], epoch=30,
           train_batch = 16, val_batch = 16, val_at = 10,
-          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0,
-          preprocessor = None, isConditionProb=True):
+          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0, fine_scaler = 1.0,
+          preprocessor = None, isConditionProb=True, coastBack=True):
     
     best_v_result = 0.0
     backbones = nn.ModuleList([backbone_1, backbone_2])
     
     model = HTCNN_M(label_file, with_aux = True, with_fc = True, backbones=backbones,
-              isCuda=True, isConditionProb=isConditionProb).to(device)
+              isCuda=True, isConditionProb=isConditionProb, coastBack=coastBack).to(device)
     
     #for name, param in model.named_parameters():
     #    if param.requires_grad:
@@ -563,12 +563,12 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
     
     
     lr = start_lr
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=0.0001)
+    optimizer = optim.SGD(model.parameters(), lr=lr)
     #optimizer = optim.Adagrad(model.parameters(), lr=lr)
     
     
     # create losses
-    losses = []
+    losses = nn.ModuleList()
     aux_loss_names = []
     aux_val_names = []
     final_loss = nn.MultiLabelSoftMarginLoss()
@@ -616,7 +616,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                 else:
                     epoch_aux_losses_v[iloss] += aux_loss_v
                 iloss += 1
-            fine_loss = losses[-1](pred_aux[-1], gt_final) 
+            fine_loss = losses[-1](pred_aux[-1], gt_final) *fine_scaler
             total_loss += fine_loss
             fine_loss_v = fine_loss.item()
             if len(epoch_aux_losses_v) <= iloss:
@@ -698,13 +698,13 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
 def train_mb_in(trainset, valset, label_file, output_path, output_fname, 
           start_lr=0.1, lr_discount=0.1, lr_steps=[], epoch=30,
           train_batch = 16, val_batch = 16, val_at = 10,
-          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0,
-          preprocessor = None, im_size = None, general_process = None, isConditionProb=True):
+          checkpoint = None, jud_at = -1, aux_scaler = 0.3, final_scaler = 1.0, fine_scaler = 1.0,
+          preprocessor = None, im_size = None, general_process = None, isConditionProb=True, coastBack=True):
     
     best_v_result = 0.0
     backbones = nn.ModuleList([backbone_1, backbone_2])
     model = HTCNN_M_IN(label_file, with_aux = True, with_fc = True, backbones=backbones,
-              isCuda=True, isConditionProb=isConditionProb).cuda()
+              isCuda=True, isConditionProb=isConditionProb, coastBack=coastBack).cuda()
     
     
     output_filepath = os.path.join(output_path, output_fname)
@@ -730,7 +730,7 @@ def train_mb_in(trainset, valset, label_file, output_path, output_fname,
     
     
     lr = start_lr
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=0.0001)
+    optimizer = optim.SGD(model.parameters(), lr=lr)
     #optimizer = optim.Adagrad(model.parameters(), lr=lr)
     
     
@@ -791,7 +791,7 @@ def train_mb_in(trainset, valset, label_file, output_path, output_fname,
                 else:
                     epoch_aux_losses_v[iloss] += aux_loss_v
                 iloss += 1
-            fine_loss = losses[-1](pred_aux[-1], gt_final) 
+            fine_loss = losses[-1](pred_aux[-1], gt_final) *fine_scaler
             total_loss += fine_loss 
             fine_loss_v = fine_loss.item()
             if len(epoch_aux_losses_v) <= iloss:
@@ -867,12 +867,14 @@ def main():
     is_cond = args.cond == 1
     aux_weight = args.aux_weight
     final_weight = args.final_weight
+    fine_weight = args.fine_weight
     step_down = [int(sd) for sd in args.step_down.split(',')]
     nepoch = args.epoch
     val_at = args.val_at
     train_batch = args.train_batch
     val_batch = args.val_batch
     lr = args.lr
+    coastBack = args.enable_coast == 1
     
     checkpoint_path = os.path.join(model_path, model_fname)
     
@@ -885,7 +887,7 @@ def main():
               output_path = model_path, output_fname = model_fname, 
               epoch=nepoch, val_at=val_at, lr_steps=step_down, aux_scaler=aux_weight, final_scaler=final_weight,
              train_batch=train_batch, val_batch=val_batch, checkpoint=checkpoint_path,
-              start_lr=lr,
+              start_lr=lr, coastBack=coastBack,
              preprocessor=preprocess, isConditionProb = is_cond)
     else:
         if isinstance(preprocess, list):
@@ -893,7 +895,7 @@ def main():
                   output_path = model_path, output_fname = model_fname, 
                   epoch=nepoch, val_at=val_at, lr_steps=step_down, aux_scaler=aux_weight, final_scaler=final_weight,
                  train_batch=train_batch, val_batch=val_batch, checkpoint=checkpoint_path,
-                     start_lr=lr,
+                     start_lr=lr, coastBack=coastBack,
                  preprocessor=preprocess,
                        im_size=input_sizes,
                        general_process=gp, isConditionProb = is_cond)
@@ -902,7 +904,7 @@ def main():
                   output_path = model_path, output_fname = model_fname, 
                   epoch=nepoch, val_at=val_at, lr_steps=step_down, aux_scaler=aux_weight, final_scaler=final_weight,
                  train_batch=train_batch, val_batch=val_batch, checkpoint=checkpoint_path,
-                     start_lr=lr,
+                     start_lr=lr, coastBack=coastBack,
                  preprocessor=preprocess, isConditionProb = is_cond)
     
     backbone_1 = None
@@ -917,6 +919,8 @@ if __name__ == '__main__':
                        help='identify it is a condition prob or not')
     parser.add_argument('--aux-weight', dest='aux_weight', type=float, default=1.0,
                        help='loss weight for auxiliry losses')
+    parser.add_argument('--fine-weight', dest='fine_weight', type=float, default=1.0,
+                       help='loss weight for fine loss')
     parser.add_argument('--final-weight', dest='final_weight', type=float, default=1.0,
                        help='loss weight for fused loss')
     parser.add_argument('--backbone', dest='backbone_net', default='alexnet',
@@ -949,6 +953,8 @@ if __name__ == '__main__':
                        help='define the batch size of validation')
     parser.add_argument('--lr', dest='lr', type=float, default=0.1,
                        help='define the starting learning rate')
+    parser.add_argument('--enable-coast', dest='enable_coast', type=int, default=1,
+                       help='enable the backpropagation of coast projection layers')
     
 
     args = parser.parse_args()

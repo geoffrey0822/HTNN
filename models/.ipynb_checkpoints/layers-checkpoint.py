@@ -4,8 +4,8 @@ import os
 
 class Projection(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, weight, shadow):
-        ctx.save_for_backward(input, weight)
+    def forward(ctx, input, weight, forceDisable):
+        ctx.save_for_backward(input, weight, forceDisable)
         tmp = (weight == weight.max(dim=0, keepdim=True)[0])
         sigma = tmp.view_as(weight).int().float()
         sigma_w = sigma.mul(weight)
@@ -17,14 +17,14 @@ class Projection(torch.autograd.Function):
     
     @staticmethod
     def backward(ctx, grad_output):
-        input, weight= ctx.saved_tensors
+        input, weight, forceDisable = ctx.saved_tensors
         #print('backward')
         grad_input = grad_weight = None
         tmp = (weight == weight.max(dim=0, keepdim=True)[0])
         sigma = tmp.view_as(weight).int().float()
         sigma_w = sigma.mul(weight)
         #sigma = (weight == weight.max(dim=0, keepdim=True)[0]).view_as(input).int().float()
-        if ctx.needs_input_grad[0]:
+        if ctx.needs_input_grad[0] and not forceDisable:
             grad_input = grad_output.mm(sigma_w.t())
         if ctx.needs_input_grad[1]:
             grad_weight = grad_output.t().mm(input)
@@ -33,14 +33,14 @@ class Projection(torch.autograd.Function):
 
 class ClassProjection(nn.Module):
     def __init__(self, mapfile_path = None, treeNode = None, learnable = False, n_super = 5, n_sub = 10,
-                intermap = None):
+                intermap = None, forceDisable = False):
         super(ClassProjection, self).__init__()
         tmp_pair = {} # {subclass, motherclass}
         i_mother_list = []
         i_child_list = []
         self.input_dim = 0 
         self.output_dim = 0
-        self.shadow_tensor = None
+        self.forceDisable = None
         
         if mapfile_path is not None:
             with (mapfile_path, 'r') as f:
@@ -80,7 +80,7 @@ class ClassProjection(nn.Module):
                         self.weight.data[tmp_pair[subcls], basecls] = 1.0
     
     def forward(self, input):
-        return Projection.apply(input, self.weight, self.shadow_tensor)
+        return Projection.apply(input, self.weight, self.forceDisable)
     
     #def extra_repr(self):
         #return None
