@@ -24,3 +24,10 @@ def build_itree(tree_path):
     for i_coarst in range(n_coarst):
         coarst_output_lens.append(len(tmp_dict[i_coarst]))
     return output, n_coarst, coarst_output_lens
+
+def remake_tree(lap_mat):
+    output = {}
+    for nsub in range(lap_mat.shape[1]):
+        mother = np.argmax(lap_mat[:,nsub])
+        output[nsub]=mother
+    return output

@@ -79,9 +79,40 @@ class AlexNet(nn.Module):
         return x_1, self.fc_3(x_1)
 
 
+class AlexNet32(nn.Module):
+
+    def __init__(self, n_classes=1000):
+        super(AlexNet32, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        self.classifier = nn.Linear(256, n_classes)
+        self.input_dim = [3, 32, 32]
+        self.feat_dim = 256
+
+    def forward(self, x):
+        x = self.features(x)
+        x = torch.flatten(x, 1)
+        x_1 = self.classifier(x)
+        #x = self.classifier(x)
+        return x, x_1
+
+
 class HTCNN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbone = None, 
-                 feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True):
+                 feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True, weights=None):
         super(HTCNN, self).__init__()
         
         
@@ -128,6 +159,9 @@ class HTCNN(nn.Module):
         
         self.proj_layers = nn.ModuleList()
         self.fc_s = nn.ModuleList()
+        #self.activation_func = nn.Softmax(dim=1)
+        #self.activation_func = nn.Sigmoid()
+        self.activation_func = nn.ELU()
         i = 0
         for ibin in bins:
             output_dim = len(bin_uniques[i])
@@ -150,12 +184,26 @@ class HTCNN(nn.Module):
                 self.fc_s.append(nn.Linear(input_dim, output_dim).cuda())
             else:
                 self.fc_s.append(nn.Linear(input_dim, output_dim))
+        
+        self.weights = []
+        if weights is not None:
+            if len(weights) != self.n_bin+1:
+                raise Exception('number of weight must be the same as number of bin including the fine.')
+            self.weights = weights
+        else:
+            for ibin in range(self.n_bin+1):
+                self.weights.append(1.0)
     
     def backbone(self, x):
         if self.backbone_nn is not None:
             return self.backbone_nn(x)
         else:
             return x
+        
+    def processOutput(self, x):
+        #y = F.softmax(x, dim=1)
+        y = x
+        return y
     
     def forward(self, x):
         # output nodes should be in ordered {coarst 1, coarst 2, ..., coarst n, fine} for n-coarst problem
@@ -166,78 +214,78 @@ class HTCNN(nn.Module):
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
-                    y.append(_y)
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
-                y.append(b_y)
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
 
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.activation_func(self.processOutput(torch.mul(b_y, self.weights[-1]))))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.activation_func(self.processOutput(torch.mul(b_y, self.weights[-1]))))
+                return self.activation_func(y_), None
         else:
             if self.with_aux:
                 y = []
                 y_ = None
                 for i in range(self.n_bin):
                     _y = b_y
-                    y.append(_y)
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
-                y.append(b_y)
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), None
 
 
 class HTCNN_M(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbones = None, 
-                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True):
+                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True, weights = None):
         super(HTCNN_M, self).__init__()
         
         
@@ -249,6 +297,10 @@ class HTCNN_M(nn.Module):
         self.with_aux = with_aux
         self.with_fc = with_fc
         self.isConditionProb = isConditionProb
+        self.activation_func = nn.LogSoftmax(dim=1)
+        #self.activation_func = nn.Softmax(dim=1)
+        #self.activation_func = nn.Sigmoid()
+        #self.activation_func = nn.ELU()
         with open(classTree_path, 'r') as f:
             for ln in f:
                 nodes = [int(field) for field in ln.rstrip('\n').split(',')]
@@ -306,9 +358,18 @@ class HTCNN_M(nn.Module):
                 self.fc_s.append(nn.Linear(self.input_dims[-1], output_dim).cuda())
             else:
                 self.fc_s.append(nn.Linear(self.input_dims[-1], output_dim))
-                
+        
         if (len(bins)+1)!=len(self.backbones):
             raise Exception('(%d vs %d)The number of backbone networks must be the same as number of bin'%(len(bins)+1,len(self.backbones)))
+            
+        self.weights = []
+        if weights is not None:
+            if len(weights) != self.n_bin+1:
+                raise Exception('number of weight must be the same as number of bin including the fine.')
+            self.weights = weights
+        else:
+            for ibin in range(self.n_bin+1):
+                self.weights.append(1.0)
     
     def backbone(self, x):
         output = [] 
@@ -318,6 +379,11 @@ class HTCNN_M(nn.Module):
             return output
         else:
             return x
+    
+    def processOutput(self, x):
+        #y = F.softmax(x, 1)
+        y = x
+        return y
     
     def forward(self, x):
         # output nodes should be in ordered {coarst 1, coarst 2, ..., coarst n, fine} for n-coarst problem
@@ -329,83 +395,82 @@ class HTCNN_M(nn.Module):
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
                     _y = self.fc_s[i](feat_y)
-                    y.append(_y)
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
-                y.append(b_y)
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), None
         else:
             if self.with_aux:
                 y = []
                 y_ = None
                 for i in range(self.n_bin):
-                    feat_y, b_y = back_results[i]
-                    _y = b_y
-                    y.append(_y)
+                    _y = back_results[i][1]
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
-                y.append(b_y)
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), None
 
 
 class HTCNN_M_IN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbones = None, 
-                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True):
+                 feat_dim = [], isCuda = False, isConditionProb = True, coastBack = True, weights = None):
         super(HTCNN_M_IN, self).__init__()
         
         
@@ -417,6 +482,7 @@ class HTCNN_M_IN(nn.Module):
         self.with_aux = with_aux
         self.with_fc = with_fc
         self.isConditionProb = isConditionProb
+        self.activation_func = nn.LogSoftmax(dim=1)
         with open(classTree_path, 'r') as f:
             for ln in f:
                 nodes = [int(field) for field in ln.rstrip('\n').split(',')]
@@ -477,6 +543,15 @@ class HTCNN_M_IN(nn.Module):
                 
         if (len(bins)+1)!=len(self.backbones):
             raise Exception('(%d vs %d)The number of backbone networks must be the same as number of bin'%(len(bins)+1,len(self.backbones)))
+        
+        self.weights = []
+        if weights is not None:
+            if len(weights) != self.n_bin+1:
+                raise Exception('number of weight must be the same as number of bin including the fine.')
+            self.weights = weights
+        else:
+            for ibin in range(self.n_bin+1):
+                self.weights.append(1.0)
     
     def backbone(self, x):
         output = [] 
@@ -488,6 +563,10 @@ class HTCNN_M_IN(nn.Module):
             return output
         else:
             return x
+        
+    def processOutput(self, x):
+        y = F.softmax(x, 1)
+        return x
     
     def forward(self, x):
         # output nodes should be in ordered {coarst 1, coarst 2, ..., coarst n, fine} for n-coarst problem
@@ -499,38 +578,38 @@ class HTCNN_M_IN(nn.Module):
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
                     _y = self.fc_s[i](feat_y)
-                    y.append(_y)
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
-                y.append(b_y)
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     _y = self.fc_s[i](feat_y)
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), None
         else:
             if self.with_aux:
                 y = []
@@ -538,36 +617,36 @@ class HTCNN_M_IN(nn.Module):
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
                     _y = b_y
-                    y.append(_y)
+                    y.append(self.activation_func(_y))
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
-                y.append(b_y)
+                y.append(self.activation_func(b_y))
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, y
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), y
             else:
                 y_ = None
                 for i in range(self.n_bin):
                     feat_y, b_y = back_results[i]
                     _y = b_y
                     if y_ is None:
-                        y_ = self.proj_layers[i](F.softmax(_y,dim=1))
+                        y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
                     else:
                         if self.isConditionProb:
-                            y_ = torch.mul(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # elementwise product
+                            y_ = torch.mul(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # elementwise product
                         else:
-                            y_ = torch.add(y_, self.proj_layers[i](F.softmax(_y,dim=1))) # sum
+                            y_ = torch.add(y_, self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))) # sum
                 b_y = back_results[-1][1]
                 if self.isConditionProb:
-                    y_ = torch.mul(y_, F.softmax(b_y,dim=1))
+                    y_ = torch.mul(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
                 else:
-                    y_ = torch.add(y_, F.softmax(b_y,dim=1))
-                return y_, None
+                    y_ = torch.add(y_, self.processOutput(torch.mul(b_y, self.weights[-1])))
+                return self.activation_func(y_), None
