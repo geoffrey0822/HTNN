@@ -19,7 +19,7 @@ import cv2
 from PIL import Image
 import models.layers
 import addons.trees as trees
-from models.vision import HTCNN, HTCNN_M, HTCNN_M_IN, LeNet5, AlexNet, AlexNet32
+from models.vision import HTCNN, HTCNN_M, HTCNN_M_IN, LeNet5, AlexNet, AlexNet32, AlexNet32_B, AlexNet32_C
 import argparse
 import threading
 from time import sleep
@@ -286,17 +286,21 @@ def computeBatchAccuracy(pred, expected, onehot=False):
         output.append(local_result)
     return output
 
-def computeAccuracy(dataset, model, batchsize = 1, withAux = False, preprocessor = None):
+def computeAccuracy(dataset, model, batchsize = 1, withAux = False, preprocessor = None, withLoss = None):
     data_count = len(dataset)
     ptr = 0
     batch_len = int(np.floor(float(data_count)/batchsize))
     batch_elen = int(np.ceil(float(data_count)/batchsize))
     output = []
     aux_output = []
+    loss_v = 0
     for i in range(batch_len):
         batch_data, expected_aux, expected_fine, ptr, _ = loadInBatch(dataset, ptr, batchsize, preprocessor=preprocessor,
                                                                         im_size = input_sizes)
         pred_final, pred_aux = model(batch_data)
+        if withLoss is not None:
+            v_loss = withLoss(pred_final, expected_fine).item()
+            loss_v += v_loss
         batch_result = computeBatchAccuracy([pred_final], [expected_fine])
         if output == []:
             output = batch_result
@@ -332,7 +336,7 @@ def computeAccuracy(dataset, model, batchsize = 1, withAux = False, preprocessor
             for j in range(len(aux_output)):
                 aux_output[j] /= batch_len
         
-    return output, aux_output
+    return output, aux_output, loss_v/batch_elen
 
 def computeAccuracy_m_in(dataset, model, batchsize = 1, withAux = False, preprocessors = None, im_sizes = None):
     data_count = len(dataset)
@@ -406,8 +410,8 @@ def train(trainset, valset, label_file, output_path, output_fname,
          ):
     global backbone
     best_v_result = 0.0
-    model = HTCNN(label_file, with_aux = True, with_fc = False, backbone=backbone,
-              isCuda=True, isConditionProb=isConditionProb, coastBack=coastBack, weights=f_weights).cuda()
+    model = HTCNN(label_file, with_aux = True, with_fc = True, backbone=backbone,
+              isCuda=True, isConditionProb=isConditionProb, coastBack=coastBack, weights=f_weights, autosizeFC = True).cuda()
     
     #for name, param in model.named_parameters():
     #    if param.requires_grad:
@@ -430,7 +434,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
     
     model.eval()
     with torch.no_grad():
-        val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+        val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
         v_result = val_result[0]
         print('Validation Accuracy: %f'%v_result)
         print(aux_val_result)
@@ -445,22 +449,23 @@ def train(trainset, valset, label_file, output_path, output_fname,
     
     optimizer = optim.SGD(param_list, lr=lr, momentum=0.9, weight_decay=5e-4)
     #optimizer = optim.Adagrad(model.parameters(), lr=lr)
-    
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
     
     # create losses
     losses = []
     aux_loss_names = []
     aux_val_names = []
-    final_loss = nn.CrossEntropyLoss()
+    final_loss = nn.NLLLoss()
     for lv in lookup_lv_list:
-        losses.append(nn.CrossEntropyLoss())
+        losses.append(nn.NLLLoss())
         aux_loss_names.append('Coarst %d loss'%lv)
         aux_val_names.append('Level %d accuracy'%lv)
-    losses.append(nn.CrossEntropyLoss())
+    losses.append(nn.NLLLoss())
     aux_loss_names.append('Fine loss')
     aux_val_names.append('Fine accuracy')
     n_aux = len(losses) - 1
     aux_accuracy = {}
+    vloss = nn.NLLLoss()
     
     for i in range(epoch):
         # training phase
@@ -520,7 +525,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
             if epoch_loss_v == 0:
                 epoch_loss_v = total_loss.item()
             
-            result = computeBatchAccuracy([pred_final.item()],[gt_final])
+            result = computeBatchAccuracy([pred_final.data],[gt_final])
             if epoch_result == []:
                 epoch_result = result
             else:
@@ -528,6 +533,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
             iter_c += 1
             print('[iteration %d]Data Loading Time:%f seconds; Computation Time:%f seconds'%(iter_c,pp_elapsed_time, model_fwd_elapsed_time))
         
+        scheduler.step()
         plot_loss = {}
         for iloss in range(n_aux+1):
             epoch_aux_losses_v[iloss] /= iter_c
@@ -548,7 +554,8 @@ def train(trainset, valset, label_file, output_path, output_fname,
             print('Validating...')
             model.eval()
             with torch.no_grad():
-                val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+                val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor,
+                                                                    withLoss = vloss)
                 for iacc in range(len(aux_val_names)):
                     aux_accuracy[aux_val_names[iacc]] = aux_val_result[iacc]
                 v_result = val_result[0]
@@ -558,12 +565,13 @@ def train(trainset, valset, label_file, output_path, output_fname,
                     print('Best model found and saving it.')
                     torch.save(model.state_dict(), output_filepath)
                     best_v_result = v_result
-        if i in lr_steps:
-            olr = lr
-            lr *= lr_discount
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-            print('learning rate has been discounted from %f to %f'%(olr, lr))
+                plotter.plot('Validation Loss', 'final','Validation Loss', i, v_loss)
+        #if i in lr_steps:
+        #    olr = lr
+        #    lr *= lr_discount
+        #    for param_group in optimizer.param_groups:
+        #        param_group['lr'] = lr
+        #    print('learning rate has been discounted from %f to %f'%(olr, lr))
         for i_aux in range(len(aux_accuracy)):
             plotter.plot('acc','aux %d'%(i_aux),'Accuracy', i, aux_accuracy[aux_val_names[i_aux]])
         plotter.plot('acc','final','Final Accuracy', i, v_result)
@@ -627,7 +635,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
     model.eval()
     with torch.no_grad():
         
-        val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+        val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
         v_result = val_result[0]
         print('Validation Accuracy: %f'%v_result)
         print(aux_val_result)
@@ -640,15 +648,24 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                   {'params':model.fc_s.parameters()},
                   {'params':model.backbones[0].parameters()}
                  ]
-    default_rate_scaler = args.lr_discount
-    rate_scaler = default_rate_scaler
+    
+    fine_lr = start_lr
+    fine_lr_rate = lr_discount
+    fine_steps = lr_steps
+    if args.f_same!=1:
+        fine_lr = args.f_lr
+        fine_lr_rate = args.f_lr_discount
+        fine_steps = [int(istep) for istep in args.f_step_down.split(',')]
+    
+    default_rated_scaler = args.lr
+    rated_scaler = default_rated_scaler
     for i in range(1, len(backbones)):
-        param_list.append({'params':model.backbones[i].parameters(), 'lr':lr*rate_scaler})
-        rate_scaler *= default_rate_scaler
+        param_list.append({'params':model.backbones[i].parameters(), 'lr':rated_scaler})
     
     optimizer = optim.SGD(param_list, lr=lr, momentum=0.9, weight_decay=5e-4)
     #optimizer = optim.ASGD(param_list, lr=lr, weight_decay=1e-4)
-    
+    #scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=0.01)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
     
     # create losses
     losses = nn.ModuleList()
@@ -664,6 +681,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
     aux_val_names.append('Fine accuracy')
     n_aux = len(losses) - 1
     aux_accuracy = {}
+    vloss = nn.NLLLoss(size_average=None, reduce=None)
     
     ptr = 0
     for i in range(epoch):
@@ -722,7 +740,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
             
             # update weights
             optimizer.step()
-            
+            #scheduler.step()
             
             if iter_c == 0:
                 epoch_loss_v = total_loss.item()
@@ -744,7 +762,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                                                                                                        total_loss.item(),
                                                                                                        aux_loss_str
                                                                                                       ))
-        
+        scheduler.step()
         #print('Training Loss:', end='')
         plot_loss = {}
         aux_losses_names = []
@@ -772,7 +790,8 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
             print('Validating...')
             model.eval()
             with torch.no_grad():
-                val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+                val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor,
+                                                                    withLoss = vloss)
                 for iacc in range(len(aux_val_names)):
                     aux_accuracy[aux_val_names[iacc]] = aux_val_result[iacc]
                 f_v_result = aux_val_result[-1]
@@ -783,22 +802,56 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                     print('Best model found and saving it.')
                     torch.save(model.state_dict(), output_filepath)
                     best_v_result = v_result
+                plotter.plot('Validation Loss', 'final','Validation Loss', i, v_loss)
         
         diff_losses, diff_names = compute_loss_diff(epoch_aux_losses_v, losses_name = aux_losses_names)
         for i_dloss in range(len(diff_losses)):
-            if v_result-last_top1>=0.0:
+            if f_v_result-last_top1>0.0:
                 plotter.plot_scatter('difference of loss', '%s (+)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
                                     [0,255,0])
+            elif f_v_result-last_top1==0.0:
+                plotter.plot_scatter('difference of loss', '%s (*)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
+                                    [10,10,10])
             else:
                 plotter.plot_scatter('difference of loss', '%s (-)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
                                     [255,0,0])
         
-        if (i+1) in lr_steps:
-            olr = lr
-            lr *= lr_discount
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-            print('learning rate has been discounted from %f to %f'%(olr, lr))
+        if args.f_same == 1:
+            
+            #old_lr = scheduler.get_last_lr()
+            #scheduler.step()
+            #print('learning rate has been discounted from %f to %f'%(old_lr, scheduler.get_last_lr()))
+            if (i+1) in lr_steps:
+                pass
+                #olr = lr
+                #lr *= lr_discount
+                #for param_group in optimizer.param_groups:
+                #    param_group['lr'] = lr
+                #print('learning rate has been discounted from %f to %f'%(olr, lr))
+        else:
+            if (i+1) in lr_steps:
+                olr = lr
+                lr *= lr_discount
+                lr_t = len(param_list)
+                lr_i = 0
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                    lr_i += 1
+                    if lr_i>=(lr_t-1):
+                        break
+                print('learning rate has been discounted from %f to %f for aux'%(olr, lr))
+            if (i+1) in fine_steps:
+                olr = fine_lr
+                lr *= fine_lr_rate
+                lr_i = 0
+                lr_t = len(param_list)
+                for param_group in optimizer.param_groups:
+                    lr_i += 1
+                    if lr_i!=lr_t:
+                        continue
+                    param_group['lr'] = lr
+                print('learning rate has been discounted from %f to %f for fine'%(olr, lr))
+                
         for i_aux in range(len(aux_accuracy)):
             plotter.plot('acc','aux %d'%(i_aux),'Accuracy', i, aux_accuracy[aux_val_names[i_aux]])
         plotter.plot('acc','final','Final Accuracy', i, v_result)
@@ -839,7 +892,7 @@ def train_mb_in(trainset, valset, label_file, output_path, output_fname,
     
     model.eval()
     with torch.no_grad():
-        val_result, aux_val_result = computeAccuracy_m_in(valset, model, val_batch, withAux=True,
+        val_result, aux_val_result, v_loss = computeAccuracy_m_in(valset, model, val_batch, withAux=True,
                                                          im_sizes = im_size,
                                                          preprocessors = v_preprocessor)
         v_result = val_result[0]
@@ -953,7 +1006,7 @@ def train_mb_in(trainset, valset, label_file, output_path, output_fname,
             print('Validating...')
             model.eval()
             with torch.no_grad():
-                val_result, aux_val_result = computeAccuracy_m_in(valset, model, val_batch, withAux=True,
+                val_result, aux_val_result, v_loss = computeAccuracy_m_in(valset, model, val_batch, withAux=True,
                                                                  im_sizes = im_size,
                                                          preprocessors = v_preprocessor)
                 for iacc in range(len(aux_val_names)):
@@ -1011,7 +1064,7 @@ def train_coast(trainset, valset, label_file, output_path, output_fname,
     backbone.eval()
     model.eval()
     with torch.no_grad():
-        val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+        val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
         v_result = val_result[0]
         print('Validation Accuracy: %f'%v_result)
         print(aux_val_result)
@@ -1127,7 +1180,7 @@ def train_coast(trainset, valset, label_file, output_path, output_fname,
             backbone.eval()
             model.eval()
             with torch.no_grad():
-                val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+                val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
                 for iacc in range(len(aux_val_names)):
                     aux_accuracy[aux_val_names[iacc]] = aux_val_result[iacc]
                 v_result = val_result[0]
@@ -1192,7 +1245,7 @@ def train_mb_coast(trainset, valset, label_file, output_path, output_fname,
     
     model.eval()
     with torch.no_grad():
-        val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+        val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
         v_result = val_result[0]
         print('Validation Accuracy: %f'%v_result)
         print(aux_val_result)
@@ -1304,7 +1357,7 @@ def train_mb_coast(trainset, valset, label_file, output_path, output_fname,
             print('Validating...')
             model.eval()
             with torch.no_grad():
-                val_result, aux_val_result = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
+                val_result, aux_val_result, v_loss = computeAccuracy(valset, model, val_batch, withAux=True, preprocessor = v_preprocessor)
                 for iacc in range(len(aux_val_names)):
                     aux_accuracy[aux_val_names[iacc]] = aux_val_result[iacc]
                 v_result = val_result[0]
@@ -1436,8 +1489,14 @@ if __name__ == '__main__':
                        help='indentify the network learns the coast or not')
     parser.add_argument('--n-coast', dest='n_coast', type=int, default=0,
                        help='indentify the number of coast to learn')
-    parser.add_argument('--fine-lr-discount', dest='lr_discount', type=float, default=1.0,
+    parser.add_argument('--fine-lr', dest='f_lr', type=float, default=0.1,
+                       help='define the learning rate for the fine branch')
+    parser.add_argument('--fine-lr-discount', dest='f_lr_discount', type=float, default=0.1,
                        help='define the learning rate discount for the fine branch')
+    parser.add_argument('--fine-step-down', dest='f_step_down', default=[100, 200],
+                       help='define the step down epoch for the fine branch')
+    parser.add_argument('--fine-same', dest='f_same', type=int, default=1,
+                       help='identify the learning rate schedule of fine branch is the same as auxilaries')
     parser.add_argument('--fusion-weights', dest='fusion_weights', default = None,
                        help='define weights of bin output for fusion')
     
@@ -1469,12 +1528,17 @@ if __name__ == '__main__':
         os.mkdir(model_path)
     model_fname = 'model.pth'
     
-    #backbone_1 = LeNet5(n_classes=coarst_dims[0]).cuda()
+    #backbone_1 = LeNet5(n_classes=coarst_dims[0])
     #backbone_2 = LeNet5(n_classes=n_fine).cuda()
-    backbone_1 = AlexNet32(n_classes=coarst_dims[0])
-    backbone_2 = AlexNet32(n_classes=n_fine)
-    #backbone = backbone_2
-    backbone = None
+    #backbone_1 = AlexNet32(n_classes=coarst_dims[0])
+    #backbone_2 = AlexNet32(n_classes=n_fine)
+    
+    backbone_2 = AlexNet32_B(n_classes=n_fine)
+    
+    #backbone_1 = AlexNet32_C(n_classes=coarst_dims[0], feature_dim=128)
+    #backbone_2 = AlexNet32_C(n_classes=n_fine, feature_dim=256)
+    backbone = backbone_2
+    #backbone = None
     backbone_inshape = backbone_2.input_dim
     
     gp = transforms.Compose([
@@ -1505,7 +1569,7 @@ if __name__ == '__main__':
     ])
     
     preprocess_4 = Compose([
-        PadIfNeeded(40, 40, cv2.BORDER_CONSTANT, [0,0,0]),
+        PadIfNeeded(40, 40, cv2.BORDER_CONSTANT, 0),
         RandomCrop(32,32),
         HorizontalFlip(p=0.5),
         ToTensor(normalize={

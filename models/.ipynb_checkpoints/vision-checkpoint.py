@@ -110,11 +110,78 @@ class AlexNet32(nn.Module):
         return x, x_1
 
 
+class AlexNet32_B(nn.Module):
+
+    def __init__(self, n_classes=1000):
+        super(AlexNet32_B, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        self.drop = nn.Dropout(p=0.5)
+        self.fc1 = nn.Linear(256, 1024)
+        self.classifier = nn.Linear(1024, n_classes)
+        self.input_dim = [3, 32, 32]
+        self.feat_dim = 1024
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.drop(F.relu(self.fc1(torch.flatten(x, 1))))
+        x_1 = self.classifier(x)
+        #x = self.classifier(x)
+        return x, x_1
+
+
+class AlexNet32_C(nn.Module):
+
+    def __init__(self, n_classes=1000, feature_dim=256):
+        super(AlexNet32_C, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        self.drop = nn.Dropout(p=0.5)
+        self.fc1 = nn.Linear(256, feature_dim)
+        self.classifier = nn.Linear(feature_dim, n_classes)
+        self.input_dim = [3, 32, 32]
+        self.feat_dim = feature_dim
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.drop(F.relu(self.fc1(torch.flatten(x, 1))))
+        x_1 = self.classifier(x)
+        #x = self.classifier(x)
+        return x, x_1
+
+
 class HTCNN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbone = None, 
-                 feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True, weights=None):
+                 feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True, weights=None, autosizeFC = False):
         super(HTCNN, self).__init__()
         
+        self.autosizeFC = autosizeFC
         
         self.n_bin = 0
         self.coastBack = coastBack
@@ -159,21 +226,29 @@ class HTCNN(nn.Module):
         
         self.proj_layers = nn.ModuleList()
         self.fc_s = nn.ModuleList()
+        self.coast_f = nn.ModuleList()
+        self.activation_func = nn.LogSoftmax(dim=1)
         #self.activation_func = nn.Softmax(dim=1)
         #self.activation_func = nn.Sigmoid()
-        self.activation_func = nn.ELU()
+        #self.activation_func = nn.ELU()
         i = 0
+        n_fine = len(bin_uniques[-1])
         for ibin in bins:
             output_dim = len(bin_uniques[i])
+            f_input_dim = input_dim
+            if autosizeFC:
+                f_input_dim = int(np.ceil(input_dim*float(output_dim)/n_fine))
             forceDisable = not coastBack
             if isCuda:
                 self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable = forceDisable).cuda())
                 if with_fc:
-                    self.fc_s.append(nn.Linear(input_dim, output_dim).cuda())
+                    self.fc_s.append(nn.Linear(f_input_dim, output_dim).cuda())
+                    self.coast_f.append(nn.Linear(input_dim, f_input_dim).cuda())
             else:
                 self.proj_layers.append(ClassProjection(treeNode = ibin, intermap=i_bins[i], forceDisable = forceDisable))
                 if with_fc:
                     self.fc_s.append(nn.Linear(input_dim, output_dim))
+                    self.coast_f.append(nn.Linear(input_dim, f_input_dim))
             
             i += 1
             
@@ -205,6 +280,12 @@ class HTCNN(nn.Module):
         y = x
         return y
     
+    def processCoast(self, x, i):
+        if self.autosizeFC:
+            return self.coast_f[i](x)
+        else:
+            return x
+    
     def forward(self, x):
         # output nodes should be in ordered {coarst 1, coarst 2, ..., coarst n, fine} for n-coarst problem
         feat_y, b_y = self.backbone(x)
@@ -213,7 +294,7 @@ class HTCNN(nn.Module):
                 y = []
                 y_ = None
                 for i in range(self.n_bin):
-                    _y = self.fc_s[i](feat_y)
+                    _y = self.fc_s[i](self.processCoast(feat_y, i))
                     y.append(self.activation_func(_y))
                     if y_ is None:
                         y_ = self.proj_layers[i](self.processOutput(torch.mul(_y, self.weights[i])))
