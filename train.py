@@ -19,7 +19,7 @@ import cv2
 from PIL import Image
 import models.layers
 import addons.trees as trees
-from models.vision import HTCNN, HTCNN_M, HTCNN_M_IN, LeNet5, AlexNet, AlexNet32, AlexNet32_B, AlexNet32_C
+from models.vision import HTCNN, HTCNN_M, HTCNN_M_IN, LeNet5, AlexNet, AlexNet32, AlexNet32_B, AlexNet32_C, AlexNet32_D
 import argparse
 import threading
 from time import sleep
@@ -449,7 +449,8 @@ def train(trainset, valset, label_file, output_path, output_fname,
     
     optimizer = optim.SGD(param_list, lr=lr, momentum=0.9, weight_decay=5e-4)
     #optimizer = optim.Adagrad(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
+    #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience = int(np.ceil(4.0/val_at)), threshold=1e-3)
     
     # create losses
     losses = []
@@ -533,7 +534,7 @@ def train(trainset, valset, label_file, output_path, output_fname,
             iter_c += 1
             print('[iteration %d]Data Loading Time:%f seconds; Computation Time:%f seconds'%(iter_c,pp_elapsed_time, model_fwd_elapsed_time))
         
-        scheduler.step()
+        #scheduler.step()
         plot_loss = {}
         for iloss in range(n_aux+1):
             epoch_aux_losses_v[iloss] /= iter_c
@@ -550,7 +551,10 @@ def train(trainset, valset, label_file, output_path, output_fname,
         print(plot_loss)
         
         # validation phase
-        if i % val_at == 0:
+        if i % val_at == 0 or (i+1)==epoch:
+            disp_i = i+1
+            if i==0:
+                disp_i = 0
             print('Validating...')
             model.eval()
             with torch.no_grad():
@@ -565,16 +569,17 @@ def train(trainset, valset, label_file, output_path, output_fname,
                     print('Best model found and saving it.')
                     torch.save(model.state_dict(), output_filepath)
                     best_v_result = v_result
-                plotter.plot('Validation Loss', 'final','Validation Loss', i, v_loss)
+                plotter.plot('Validation Loss', 'final','Validation Loss', disp_i, v_loss)
+                scheduler.step(v_loss)
         #if i in lr_steps:
         #    olr = lr
         #    lr *= lr_discount
         #    for param_group in optimizer.param_groups:
         #        param_group['lr'] = lr
         #    print('learning rate has been discounted from %f to %f'%(olr, lr))
-        for i_aux in range(len(aux_accuracy)):
-            plotter.plot('acc','aux %d'%(i_aux),'Accuracy', i, aux_accuracy[aux_val_names[i_aux]])
-        plotter.plot('acc','final','Final Accuracy', i, v_result)
+            for i_aux in range(len(aux_accuracy)):
+                plotter.plot('acc','aux %d'%(i_aux),'Accuracy', disp_i, aux_accuracy[aux_val_names[i_aux]])
+            plotter.plot('acc','final','Final Accuracy', disp_i, v_result)
         #writer.add_scalars('Auxiliary Accuracy', 
         #                  aux_accuracy,
         #                  i)
@@ -665,7 +670,8 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
     optimizer = optim.SGD(param_list, lr=lr, momentum=0.9, weight_decay=5e-4)
     #optimizer = optim.ASGD(param_list, lr=lr, weight_decay=1e-4)
     #scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=0.01)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
+    #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=lr_steps, gamma=lr_discount)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience = int(np.ceil(4.0/val_at)), threshold=1e-3)
     
     # create losses
     losses = nn.ModuleList()
@@ -762,7 +768,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                                                                                                        total_loss.item(),
                                                                                                        aux_loss_str
                                                                                                       ))
-        scheduler.step()
+        #scheduler.step()
         #print('Training Loss:', end='')
         plot_loss = {}
         aux_losses_names = []
@@ -786,7 +792,10 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
         
         last_top1 = f_v_result
         # validation phase
-        if i % val_at == 0:
+        if i % val_at == 0 or (i+1)==epoch:
+            disp_i = i+1
+            if i==0:
+                disp_i = 0
             print('Validating...')
             model.eval()
             with torch.no_grad():
@@ -802,19 +811,23 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                     print('Best model found and saving it.')
                     torch.save(model.state_dict(), output_filepath)
                     best_v_result = v_result
-                plotter.plot('Validation Loss', 'final','Validation Loss', i, v_loss)
+                plotter.plot('Validation Loss', 'final','Validation Loss', disp_i, v_loss)
+                scheduler.step(v_loss)
+            for i_aux in range(len(aux_accuracy)):
+                plotter.plot('acc','aux %d'%(i_aux),'Accuracy', disp_i, aux_accuracy[aux_val_names[i_aux]])
+                plotter.plot('acc','final','Final Accuracy', disp_i, v_result)
         
-        diff_losses, diff_names = compute_loss_diff(epoch_aux_losses_v, losses_name = aux_losses_names)
-        for i_dloss in range(len(diff_losses)):
-            if f_v_result-last_top1>0.0:
-                plotter.plot_scatter('difference of loss', '%s (+)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
-                                    [0,255,0])
-            elif f_v_result-last_top1==0.0:
-                plotter.plot_scatter('difference of loss', '%s (*)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
-                                    [10,10,10])
-            else:
-                plotter.plot_scatter('difference of loss', '%s (-)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
-                                    [255,0,0])
+        #diff_losses, diff_names = compute_loss_diff(epoch_aux_losses_v, losses_name = aux_losses_names)
+        #for i_dloss in range(len(diff_losses)):
+        #    if f_v_result-last_top1>0.0:
+        #        plotter.plot_scatter('difference of loss', '%s (+)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
+        #                            [0,255,0])
+        #    elif f_v_result-last_top1==0.0:
+        #        plotter.plot_scatter('difference of loss', '%s (*)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
+        #                            [10,10,10])
+        #    else:
+        #        plotter.plot_scatter('difference of loss', '%s (-)'%diff_names[i_dloss], 'Different of Loss', i, diff_losses[i_dloss],
+        #                            [255,0,0])
         
         if args.f_same == 1:
             
@@ -852,9 +865,7 @@ def train_mb(trainset, valset, label_file, output_path, output_fname,
                     param_group['lr'] = lr
                 print('learning rate has been discounted from %f to %f for fine'%(olr, lr))
                 
-        for i_aux in range(len(aux_accuracy)):
-            plotter.plot('acc','aux %d'%(i_aux),'Accuracy', i, aux_accuracy[aux_val_names[i_aux]])
-        plotter.plot('acc','final','Final Accuracy', i, v_result)
+        
         #writer.add_scalars('Auxiliary Accuracy', 
         #                  aux_accuracy,
         #                  i)
@@ -1533,10 +1544,12 @@ if __name__ == '__main__':
     #backbone_1 = AlexNet32(n_classes=coarst_dims[0])
     #backbone_2 = AlexNet32(n_classes=n_fine)
     
-    backbone_2 = AlexNet32_B(n_classes=n_fine)
+    #backbone_2 = AlexNet32_B(n_classes=n_fine)
+    backbone_2 = AlexNet32_C(n_classes=n_fine, feature_dim = 384)
     
-    #backbone_1 = AlexNet32_C(n_classes=coarst_dims[0], feature_dim=128)
-    #backbone_2 = AlexNet32_C(n_classes=n_fine, feature_dim=256)
+    #backbone_1 = AlexNet32_D(n_classes=coarst_dims[0], fdim=64)
+    #backbone_2 = AlexNet32_D(n_classes=n_fine, feature_dim=384)
+    #backbone_1.common_features = backbone_2.common_features
     backbone = backbone_2
     #backbone = None
     backbone_inshape = backbone_2.input_dim

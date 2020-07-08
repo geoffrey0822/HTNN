@@ -176,6 +176,70 @@ class AlexNet32_C(nn.Module):
         return x, x_1
 
 
+class AlexNet32_D(nn.Module):
+
+    def __init__(self, n_classes=1000, cdim=1024, fdim=256):
+        super(AlexNet32_D, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(384, cdim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(cdim, fdim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        self.common_features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.classifier = nn.Linear(fdim, n_classes)
+        self.input_dim = [3, 32, 32]
+        self.feat_dim = fdim
+
+    def forward(self, x):
+        x = self.features(self.common_features(x))
+        x = torch.flatten(x, 1)
+        x_1 = self.classifier(x)
+        #x = self.classifier(x)
+        return x, x_1
+
+
+class FlexiNet(nn.Module):
+
+    def __init__(self, backbone, n_classes=1000):
+        super(FlexiNet, self).__init__()
+        self.features = None
+        self.common_features = backbone
+        self.classifier = nn.Linear(feature_dim, n_classes)
+        self.input_dim = [3, 32, 32]
+        self.feat_dim = feature_dim
+        self.flexiable = True
+
+    def createTasks(feature_dims):
+        self.subfeats = nn.ModuleList()
+        for fdim in feature_dims:
+            feats = nn.Sequential(
+                nn.Conv2d(384, fdim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(feature_dim, fdim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+            )
+            self.subfeats.append(feats)
+        
+    def forward(self, x):
+        x = self.features(self.common_features(x))
+        x = torch.flatten(x, 1)
+        x_1 = self.classifier(x)
+        #x = self.classifier(x)
+        return x, x_1
+
+
 class HTCNN(nn.Module):
     def __init__(self, classTree_path, with_aux = True, with_fc = True, backbone = None, 
                  feat_dim = 0, isCuda = False, isConditionProb = True, coastBack = True, weights=None, autosizeFC = False):
